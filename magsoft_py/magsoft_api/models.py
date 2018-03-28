@@ -8,34 +8,61 @@
 from datetime import timedelta, datetime
 
 from django.contrib import auth
-from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError
+from django.contrib.auth.models import User, UserManager
+from django.core.exceptions import ValidationError, ObjectDoesNotExist
 from django.core.validators import RegexValidator
 from django.db import models
-
+from django.db.models.base import ModelBase
 
 PHONE_VALIDATOR = RegexValidator(regex=r'^[-+0-9]{10,}$')
 
+
+class KeyValueModel(ModelBase):
+    def __len__(cls):
+        return cls.objects.count()
+
+    def __getitem__(cls, key):
+        try:
+            return cls.objects.get(key=key).value
+        except ObjectDoesNotExist:
+            raise KeyError(key)
+
+    def __setitem__(cls, key, value):
+        cls.objects.update_or_create(key=key, value=value)
+
+    def __delitem__(cls, key):
+        count = cls.objects.filter(key=key).delete()[0]
+        if count != 1:
+            raise KeyError(key)
+
+    def __iter__(cls):
+        return cls.objects.all()
+
+    def __contains__(cls, key):
+        return cls.objects.filter(key=key).count() == 1
+
+
 class Alerts(models.Model):
     id = models.AutoField(primary_key=True)
-    email = models.ForeignKey('Users', models.CASCADE, db_column='email')
+    email = models.ForeignKey('Users', models.CASCADE, to_field='email', db_column='email')
     title = models.CharField(max_length=255)
     text = models.CharField(max_length=5000)
-    location = models.CharField(max_length=255)
+    location = models.CharField(max_length=255, default='')
+
     class Meta:
         db_table = 'alerts'
 
 
 class Badges(models.Model):
     id = models.AutoField(primary_key=True)
-    email = models.ForeignKey('Users', models.DO_NOTHING, db_column='email')
+    email = models.ForeignKey('Users', models.DO_NOTHING, to_field='email', db_column='email')
     zip = models.IntegerField()
     extra = models.SmallIntegerField()
     shirt = models.IntegerField()
-    badgename = models.CharField(db_column='badgeName', max_length=255)  # Field name made lowercase.
-    spam = models.IntegerField()
-    badgeadded = models.IntegerField(db_column='badgeAdded')  # Field name made lowercase.
-    badgedata = models.CharField(db_column='badgeData', max_length=255)  # Field name made lowercase.
+    badge_name = models.CharField(db_column='badgeName', max_length=255)  # Field name made lowercase.
+    spam = models.BooleanField()
+    badge_added = models.BooleanField(db_column='badgeAdded', default=False)  # Field name made lowercase.
+    badge_data = models.CharField(db_column='badgeData', max_length=255, blank=True, default='')  # Field name made lowercase.
     year = models.SmallIntegerField()
 
     class Meta:
@@ -43,9 +70,27 @@ class Badges(models.Model):
         unique_together = (('email', 'year'),)
 
 
+class BadgeExtras(models.Model):
+    id = models.AutoField(primary_key=True)
+    text = models.CharField(max_length=255)
+    cost = models.SmallIntegerField()
+    has_shirt = models.BooleanField()
+    has_name = models.BooleanField()
+
+    def __str__(self):
+        return self.text
+
+    class Meta:
+        db_table = 'badgeExtras'
+        ordering = ['cost']
+
+
 class Canroompreauth(models.Model):
     id = models.AutoField(primary_key=True, db_column='id')
     email = models.CharField(unique=True, max_length=255)
+
+    def __str__(self):
+        return self.email
 
     class Meta:
         db_table = 'canRoomPreAuth'
@@ -63,7 +108,7 @@ class Passwordreset(models.Model):
 
 class Roominfo(models.Model):
     id = models.AutoField(primary_key=True, db_column='id')
-    email = models.ForeignKey('Users', models.DO_NOTHING, db_column='email')
+    email = models.ForeignKey('Users', models.DO_NOTHING, to_field='email', db_column='email')
     year = models.IntegerField()
     night = models.CharField(max_length=255)
     numnights = models.IntegerField(db_column='numNights')  # Field name made lowercase.
@@ -76,15 +121,15 @@ class Roominfo(models.Model):
 
 class Roommates(models.Model):
     id = models.AutoField(primary_key=True, db_column='id')
-    email = models.ForeignKey('Users', models.DO_NOTHING, db_column='email')
+    email = models.ForeignKey('Users', models.DO_NOTHING, to_field='email', db_column='email')
     year = models.IntegerField()
-    wantstoroom = models.IntegerField(db_column='wantsToRoom')  # Field name made lowercase.
+    wantstoroom = models.BooleanField(db_column='wantsToRoom')  # Field name made lowercase.
     likes = models.CharField(max_length=10000)
     dislikes = models.CharField(max_length=10000)
     nights = models.CharField(max_length=3)
     smallroom = models.CharField(db_column='smallRoom', max_length=8)  # Field name made lowercase.
     atrium = models.CharField(max_length=8)
-    parties = models.IntegerField()
+    parties = models.BooleanField()
     allergies = models.CharField(max_length=1000)
     comments = models.CharField(max_length=10000)
 
@@ -93,10 +138,13 @@ class Roommates(models.Model):
         unique_together = (('email', 'year'),)
 
 
-class Settings(models.Model):
+class Settings(models.Model, metaclass=KeyValueModel):
     key = models.CharField(primary_key=True, max_length=255)
     value = models.TextField()
     comment = models.CharField(max_length=255)
+
+    def __str__(self):
+        return '"%s": "%s" (%s)'%(self.key, self.value, self.comment)
 
     class Meta:
         db_table = 'settings'
@@ -104,11 +152,12 @@ class Settings(models.Model):
 
 class Tab(models.Model):
     tid = models.AutoField(primary_key=True)
-    email = models.ForeignKey('Users', models.DO_NOTHING, db_column='email')
+    email = models.ForeignKey('Users', models.DO_NOTHING, to_field='email', db_column='email')
     amount = models.DecimalField(max_digits=9, decimal_places=2)
     when = models.CharField(max_length=10)
-    housecharge = models.IntegerField(db_column='houseCharge')  # Field name made lowercase.
+    housecharge = models.BooleanField(db_column='houseCharge')  # Field name made lowercase.
     notes = models.CharField(max_length=4095)
+    link = models.CharField(max_length=255, blank=True, default='')
 
     class Meta:
         db_table = 'tab'
@@ -134,6 +183,8 @@ class Users(models.Model):
     is_active = True
     is_anonymous = False
     is_authenticated = True
+
+    objects = UserManager()
 
     def clean(self):
         if self.phone==self.emergencyphone:
@@ -164,6 +215,9 @@ class Users(models.Model):
 
     def has_perm(self, perm, obj=None):
         return self.is_staff
+
+    def __str__(self):
+        return '%s %s (%s)'%(self.first_name, self.last_name, self.email)
 
     class Meta:
         db_table = 'users'
